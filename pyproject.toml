@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyauthx"
+version = "0.1.0"
+description = "..."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = ["cryptography>=45.0.6", "pydantic>=2.11.7", "pyjwt>=2.10.1"]
+
+[dependency-groups]
+dev = ["ruff==0.12.9", "taskipy==1.14.1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["pyauthx"]
+
+[tool.taskipy.tasks]
+# ...
+
+[tool.ruff]
+line-length = 88
+exclude = ["tests"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+fixable = ["ALL"]
+ignore = ["D", "COM819"]
