@@ -1,9 +1,19 @@
+from __future__ import annotations
+
 import hashlib
 from datetime import UTC, datetime
 from typing import Annotated, Final
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, conbytes, constr, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    conbytes,
+    constr,
+    field_serializer,
+    field_validator,
+)
 
 SHA256_HASH_LENGTH: Final[int] = 32  # SHA-256 produces 32-byte hashes
 MAX_FUTURE_TIMESTAMP_OFFSET: Final[int] = 31536000  # 1 year in seconds
@@ -97,6 +107,11 @@ class TokenPayload(BaseModel):
             raise ValueError(msg)
         return value
 
+    @field_serializer("jti")
+    def serialize_jti(self, jti: UUID) -> str:
+        """Convert UUID to str"""
+        return str(jti)
+
 
 class RefreshTokenRecord(BaseModel):
     """Secure storage record for refresh tokens with mTLS support."""
@@ -153,7 +168,7 @@ class RefreshTokenRecord(BaseModel):
         expires_at: datetime,
         client_id: str | None = None,
         mtls_cert: bytes | None = None,
-    ) -> "RefreshTokenRecord":
+    ) -> RefreshTokenRecord:
         """Factory method for creating new refresh token records."""
         token_hash = hashlib.sha256(raw_token.encode()).digest()
         thumbprint = hashlib.sha256(mtls_cert).hexdigest() if mtls_cert else None

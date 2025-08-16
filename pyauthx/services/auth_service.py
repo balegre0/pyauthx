@@ -1,15 +1,15 @@
+from __future__ import annotations
+
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import NoReturn, final, overload
-from uuid import UUID
+from typing import TYPE_CHECKING, NoReturn, final, overload
 
 import jwt
 from cryptography.fernet import InvalidToken
 from jwt import PyJWTError
 from pydantic import ValidationError
 
-from pyauthx.core.key_management import KeyManager
 from pyauthx.exceptions import (
     InvalidTokenError,
     MTLSValidationError,
@@ -18,6 +18,11 @@ from pyauthx.exceptions import (
     TokenReuseError,
 )
 from pyauthx.models.tokens import ClientId, RefreshTokenRecord, TokenPayload, UserId
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from pyauthx.core.key_management import KeyManager
 
 
 @final
@@ -161,12 +166,12 @@ class AuthService:
         """Exchange a valid refresh token for new access and refresh tokens."""
         try:
             token_hash = hashlib.sha256(refresh_token.encode()).digest()
-            record = next(
+            record: RefreshTokenRecord | None = next(
                 (r for r in self._refresh_store.values() if r.token_hash == token_hash),
                 None,
             )
 
-            if not record:
+            if record is None:
                 self._handle_error("Invalid refresh token", InvalidTokenError)
 
             if record.used:
@@ -176,13 +181,18 @@ class AuthService:
             self._validate_mtls(record, mtls_thumbprint)
             self._validate_token_expiry(record)
 
-            record.used = True
+            updated_record = record.model_copy(update={"used": True})
+            self._refresh_store[record.token_family.hex] = updated_record
+
             new_access_token = self.create_token(record.user_id)
             new_refresh_token, _ = self.create_refresh_token(
                 record.user_id,
                 record.client_id,
                 record.mtls_cert_thumbprint,
             )
+
+            self.cleanup_expired_tokens()
+
         except SecurityError:
             raise
         except (ValueError, TypeError, PyJWTError, ValidationError) as e:
@@ -230,10 +240,6 @@ class AuthService:
 
     def _revoke_token_family(self, family_id: UUID) -> None:
         """Revoke all tokens belonging to the same token family."""
-        family_key = family_id.hex
-        if family_key in self._refresh_store:
-            del self._refresh_store[family_key]
-
         self._refresh_store = {
             k: v for k, v in self._refresh_store.items() if v.token_family != family_id
         }

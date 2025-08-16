@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import secrets
 from dataclasses import dataclass
 from typing import Final, Protocol, final, runtime_checkable

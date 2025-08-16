@@ -5,13 +5,21 @@ build-backend = "hatchling.build"
 [project]
 name = "pyauthx"
 version = "0.1.0"
-description = "..."
+description = "🔒 - high-security jwt and encryption lib for python."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.9"
+authors = [{ name = "Brian Alegre", email = "brianalegredev@gmail.com" }]
 dependencies = ["cryptography>=45.0.6", "pydantic>=2.11.7", "pyjwt>=2.10.1"]
 
+[project.urls]
+Homepage = "https://github.com/balegre0/pyauthx"
+Repository = "https://github.com/balegre0/pyauthx"
+Changelog = "https://github.com/balegre0/pyauthx/blob/main/CHANGELOG.md"
+"Issue tracker" = "https://github.com/balegre0/pyauthx/issues"
+
+
 [dependency-groups]
-dev = ["ruff==0.12.9", "taskipy==1.14.1"]
+dev = ["pytest>=8.4.1", "ruff==0.12.9", "taskipy==1.14.1"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["pyauthx"]

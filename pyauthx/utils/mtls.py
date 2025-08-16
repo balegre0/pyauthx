@@ -1,8 +1,9 @@
+from __future__ import annotations
+
 import secrets
-import ssl
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar, Final, TypedDict, final
+from typing import TYPE_CHECKING, ClassVar, Final, TypedDict, final
 
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
@@ -11,6 +12,9 @@ from cryptography.x509 import (
     Certificate,
     load_pem_x509_certificates,
 )
+
+if TYPE_CHECKING:
+    import ssl
 
 
 class CertificateInfo(TypedDict):
@@ -88,12 +92,18 @@ class MTLSValidator:
                     for attr in name  # type: ignore[reportUnknownMemberType]
                 }
 
-            extensions = {}
+            extensions: dict[str, str] = {}
             for ext in x509_cert.extensions:
-                try:
-                    extensions[str(ext.oid)] = str(ext.value)
-                except (AttributeError, TypeError):
+                val = getattr(ext, "value", None)
+                if val is None:
                     extensions[str(ext.oid)] = "UNPARSABLE_EXTENSION"
+                elif isinstance(val, (str, int, float, bytes)):
+                    extensions[str(ext.oid)] = str(val)
+                else:
+                    try:
+                        extensions[str(ext.oid)] = str(val)
+                    except (TypeError, ValueError):
+                        extensions[str(ext.oid)] = "UNPARSABLE_EXTENSION"
 
             return {
                 "subject": parse_name(x509_cert.subject),

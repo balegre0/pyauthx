@@ -1,27 +1,34 @@
+from __future__ import annotations
+
 import secrets
 from collections import deque
 from datetime import UTC, datetime, timedelta
-from typing import Final, Literal, NotRequired, TypedDict, final
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    NoReturn,
+    NotRequired,
+    TypedDict,
+    final,
+)
 
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.hazmat.primitives.serialization import (
+    load_pem_private_key,
+)
+
+from pyauthx.exceptions import SecurityError
+
+if TYPE_CHECKING:
+    from cryptography.hazmat.primitives.asymmetric.types import PrivateKeyTypes
 
 
 class Jwk(TypedDict):
-    """JSON Web Key (JWK) representation for cryptographic keys.
-
-    Attributes:
-        kty: Key type (RSA or EC)
-        kid: Key identifier
-        use: Intended use (sig for signature)
-        alg: Algorithm identifier
-        n: RSA modulus (required for RSA)
-        e: RSA public exponent (required for RSA)
-        crv: EC curve name (required for EC)
-        x: EC x-coordinate (required for EC)
-        y: EC y-coordinate (required for EC)
-    """
+    """JSON Web Key (JWK) representation for cryptographic keys."""
 
     kty: Literal["RSA", "EC"]
     kid: str
@@ -68,20 +75,12 @@ class KeyManager:
         self._generate_new_key()
 
     def _generate_new_key(self) -> None:
-        """Generate a new cryptographic key and make it current.
-
-        Creates appropriate key material based on configured algorithm:
-        - HS256: Symmetric HMAC key
-        - RS256: RSA key pair
-        - ES256: ECDSA key pair (P-256 curve)
-        """
-        key_id = secrets.token_urlsafe(8)  # Cryptographically secure key ID
+        """Generate a new cryptographic key and make it current."""
+        key_id = secrets.token_urlsafe(8)
 
         if self._algorithm.startswith("HS"):
-            # Generate symmetric key for HMAC
             key = secrets.token_bytes(self._key_size // 8)
         elif self._algorithm == "RS256":
-            # Generate RSA key pair
             private_key = rsa.generate_private_key(
                 public_exponent=65537,
                 key_size=self._key_size,
@@ -93,9 +92,8 @@ class KeyManager:
                 encryption_algorithm=serialization.NoEncryption(),
             )
         elif self._algorithm == "ES256":
-            # Generate ECDSA key pair (P-256 curve)
             private_key = ec.generate_private_key(
-                ec.SECP256R1(),  # NIST P-256 curve
+                ec.SECP256R1(),
                 default_backend(),
             )
             key = private_key.private_bytes(
@@ -113,15 +111,9 @@ class KeyManager:
 
     def rotate_key(self) -> None:
         """Rotate the current signing key and maintain key history."""
-        # Archive current key
-        self._previous_keys.append(
-            (datetime.now(UTC), self._current_key),
-        )
-
-        # Generate new key
+        self._previous_keys.append((datetime.now(UTC), self._current_key))
         self._generate_new_key()
 
-        # Clean up expired keys
         expire_time = datetime.now(UTC) - (
             self._rotation_period * self.MAX_PREVIOUS_KEYS
         )
@@ -130,7 +122,7 @@ class KeyManager:
             self._key_store.pop(old_key_id, None)
 
     def get_jwks(self) -> list[Jwk]:
-        """Get JSON Web Key Set (JWKS) containing current public key."""
+        """Get JSON Web Key Set (JWKS) containing current public key metadata."""
         return [
             {
                 "kty": "RSA" if self._algorithm == "RS256" else "EC",
@@ -144,9 +136,63 @@ class KeyManager:
         """Get the current private key for signing operations."""
         return self._key_store[self._current_key]
 
+    @staticmethod
+    def _public_bytes_from_rsa(private_key: rsa.RSAPrivateKey) -> bytes:
+        public_key = private_key.public_key()
+        return public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+
+    @staticmethod
+    def _public_bytes_from_ec(private_key: ec.EllipticCurvePrivateKey) -> bytes:
+        public_key = private_key.public_key()
+        return public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+
+    @staticmethod
+    def _rethrow(msg: str, err: Exception) -> NoReturn:
+        raise SecurityError(msg) from err
+
+    def _load_private_key(self, pem: bytes) -> PrivateKeyTypes:
+        try:
+            return load_pem_private_key(pem, password=None, backend=default_backend())
+        except (ValueError, TypeError, UnsupportedAlgorithm) as e:
+            self._rethrow(f"Failed to load verification key: {e!s}", e)
+
+    def _to_verification_bytes(
+        self,
+        loaded: PrivateKeyTypes,
+    ) -> bytes:
+        if self._algorithm == "RS256":
+            if not isinstance(loaded, rsa.RSAPrivateKey):
+                msg = "Loaded key is not an RSA private key"
+                raise SecurityError(msg)
+            return self._public_bytes_from_rsa(loaded)
+
+        if self._algorithm == "ES256":
+            if not isinstance(loaded, ec.EllipticCurvePrivateKey):
+                msg = "Loaded key is not an EC private key"
+                raise SecurityError(msg)
+            return self._public_bytes_from_ec(loaded)
+
+        msg = f"Unsupported algorithm: {self._algorithm}"
+        raise ValueError(msg)
+
     def get_verification_key(self, kid: str) -> bytes | None:
-        """Get a specific key for verification by key ID."""
-        return self._key_store.get(kid)
+        """Get the appropriate verification key for the given key id."""
+        private_key_pem = self._key_store.get(kid)
+        if not private_key_pem:
+            return None
+
+        # HMAC reuses the same symmetric key
+        if self._algorithm.startswith("HS"):
+            return private_key_pem
+
+        loaded = self._load_private_key(private_key_pem)
+        return self._to_verification_bytes(loaded)
 
     @property
     def algorithm(self) -> str:

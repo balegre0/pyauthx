@@ -1,11 +1,16 @@
-import ssl
-from datetime import datetime
-from typing import Literal, final
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal, final
 
 from pyauthx.core.key_management import Jwk, KeyManager
-from pyauthx.models.tokens import ClientId, UserId
 from pyauthx.services.auth_service import AuthService
 from pyauthx.utils.mtls import MTLSValidator
+
+if TYPE_CHECKING:
+    import ssl
+    from datetime import datetime
+
+    from pyauthx.models.tokens import ClientId, UserId
 
 
 @final
