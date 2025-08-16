@@ -1,26 +1,26 @@
 class SecurityError(Exception):
-    """Base para todas las excepciones de seguridad"""
+    """Base class for all security-related exceptions"""
 
 
 class InvalidTokenError(SecurityError):
-    """JWT inválido o manipulado"""
+    """Invalid or tampered JWT"""
 
 
 class TokenExpiredError(SecurityError):
-    """JWT ha expirado"""
+    """Expired JWT"""
 
 
 class TokenReuseError(SecurityError):
-    """Intento de reutilización de refresh token"""
+    """Attempted refresh token reuse"""
 
 
 class KeyRotationError(SecurityError):
-    """Error en rotación de claves"""
+    """Key rotation failure"""
 
 
-class mTLSValidationError(SecurityError):  # noqa: N801
-    """Fallo en validación mTLS"""
+class MTLSValidationError(SecurityError):
+    """mTLS validation failure"""
 
 
 class CryptographicError(SecurityError):
-    """Error en operación criptográfica"""
+    """Cryptographic operation error"""

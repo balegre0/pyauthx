@@ -5,8 +5,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, conbytes, constr, field_validator
 
-SHA256_HASH_LENGTH: Final[int] = 32
-MAX_FUTURE_TIMESTAMP_OFFSET: Final[int] = 31536000
+SHA256_HASH_LENGTH: Final[int] = 32  # SHA-256 produces 32-byte hashes
+MAX_FUTURE_TIMESTAMP_OFFSET: Final[int] = 31536000  # 1 year in seconds
 
 SHA256Hash = Annotated[bytes, conbytes(min_length=32, max_length=32)]
 UserId = Annotated[
@@ -24,6 +24,19 @@ Thumbprint = Annotated[
 
 
 class TokenPayload(BaseModel):
+    """JWT payload structure with standard claims and validation.
+
+    Attributes:
+        sub: Subject identifier (user ID)
+        exp: Expiration timestamp (seconds since epoch)
+        iat: Issued at timestamp (auto-generated if not provided)
+        jti: Unique token identifier (auto-generated UUID)
+        aud: Intended audience (client ID)
+        iss: Token issuer
+        scope: Authorization scope
+        azp: Authorized party (client ID)
+    """
+
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -31,16 +44,25 @@ class TokenPayload(BaseModel):
         str_min_length=1,
     )
 
-    sub: UserId
-    exp: float
-    iat: float = Field(default_factory=lambda: datetime.now(UTC).timestamp())
-    jti: UUID = Field(default_factory=uuid4, description="Unique token identifier")
-    aud: ClientId | None = Field(default=None, description="Audience (client ID)")
+    sub: UserId = Field(..., description="Subject identifier (user ID)")
+    exp: float = Field(..., description="Expiration timestamp (seconds since epoch)")
+    iat: float = Field(
+        default_factory=lambda: datetime.now(UTC).timestamp(),
+        description="Issued at timestamp",
+    )
+    jti: UUID = Field(
+        default_factory=uuid4,
+        description="Unique token identifier (JWT ID)",
+    )
+    aud: ClientId | None = Field(
+        default=None,
+        description="Intended audience (client ID)",
+    )
     iss: str | None = Field(
         default=None,
         min_length=3,
         max_length=256,
-        description="Issuer",
+        description="Token issuer",
     )
     scope: str | None = Field(
         default=None,
@@ -50,74 +72,78 @@ class TokenPayload(BaseModel):
     )
     azp: ClientId | None = Field(
         default=None,
-        description="Authorization party (client ID)",
+        description="Authorized party (client ID)",
     )
 
     @field_validator("exp", "iat")
     @classmethod
-    def validate_timestamps(cls, v: float) -> float:
+    def validate_timestamps(cls, timestamp: float) -> float:
+        """Ensure timestamps are within valid ranges."""
         current_time = datetime.now(UTC).timestamp()
-        if v < 0:
-            msg = "El timestamp debe ser positivo"
+        if timestamp < 0:
+            msg = "Timestamp must be positive"
             raise ValueError(msg)
-        if v > current_time + MAX_FUTURE_TIMESTAMP_OFFSET:  # 1y
-            msg = "Timestamp demasiado lejano (futuro)"
+        if timestamp > current_time + MAX_FUTURE_TIMESTAMP_OFFSET:
+            msg = "Timestamp too far in the future (max 1 year)"
             raise ValueError(msg)
-        return v
+        return timestamp
 
     @field_validator("sub", "azp", "aud")
     @classmethod
-    def validate_identifiers(cls, v: str | None) -> str | None:
-        if v and any(char in v for char in "!@#$%^&*()+={}[]|\\:;\"'<>,?/"):
-            msg = "Caracteres no permitidos en identificadores"
+    def validate_identifiers(cls, value: str | None) -> str | None:
+        """Validate identifier strings don't contain special characters."""
+        if value and any(char in value for char in "!@#$%^&*()+={}[]|\\:;\"'<>,?/"):
+            msg = "Identifiers cannot contain special characters"
             raise ValueError(msg)
-        return v
+        return value
 
 
 class RefreshTokenRecord(BaseModel):
+    """Secure storage record for refresh tokens with mTLS support."""
+
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
         str_strip_whitespace=True,
     )
 
-    token_hash: SHA256Hash = Field(description="Secure hash for token (SHA-256)")
-    user_id: UserId = Field(description="Associated user ID")
-    expires_at: datetime = Field(description="Expiration date/time in UTC")
+    token_hash: SHA256Hash = Field(..., description="SHA-256 hash of the raw token")
+    user_id: UserId = Field(..., description="Associated user identifier")
+    expires_at: datetime = Field(..., description="Expiration datetime in UTC")
     used: bool = Field(
         default=False,
-        description="Indicates if the token has been used",
+        description="Indicates if token has been consumed",
     )
     client_id: ClientId | None = Field(
         default=None,
-        description="Authorized Customer ID",
+        description="Authorized client identifier",
     )
     mtls_cert_thumbprint: Thumbprint | None = Field(
         default=None,
-        description="SHA-256 fingerprint of the mTLS certificate",
+        description="SHA-256 fingerprint of bound mTLS certificate",
     )
     token_family: UUID = Field(
         default_factory=uuid4,
-        description="Unique identifier of the token family",
+        description="Token family identifier for rotation",
     )
 
     @field_validator("expires_at")
     @classmethod
-    def ensure_utc(cls, v: datetime) -> datetime:
-        if v.tzinfo is None:
-            msg = "La fecha debe tener zona horaria especificada"
+    def ensure_utc(cls, dt: datetime) -> datetime:
+        """Ensure datetime is timezone-aware and converted to UTC."""
+        if dt.tzinfo is None:
+            msg = "Datetime must have timezone specified"
             raise ValueError(msg)
-        if v.tzinfo != UTC:
-            return v.astimezone(UTC)
-        return v
+        return dt.astimezone(UTC) if dt.tzinfo != UTC else dt
 
     @field_validator("token_hash")
     @classmethod
-    def validate_hash_length(cls, v: bytes) -> bytes:
-        if len(v) != SHA256_HASH_LENGTH:
-            msg = f"El hash debe tener exactamente {SHA256_HASH_LENGTH} bytes"
+    def validate_hash_length(cls, hash_bytes: bytes) -> bytes:
+        """Validate SHA-256 hash length."""
+        if len(hash_bytes) != SHA256_HASH_LENGTH:
+            msg = f"Hash must be exactly {SHA256_HASH_LENGTH} bytes (SHA-256)"
             raise ValueError(msg)
-        return v
+        return hash_bytes
 
     @classmethod
     def create(
@@ -128,6 +154,7 @@ class RefreshTokenRecord(BaseModel):
         client_id: str | None = None,
         mtls_cert: bytes | None = None,
     ) -> "RefreshTokenRecord":
+        """Factory method for creating new refresh token records."""
         token_hash = hashlib.sha256(raw_token.encode()).digest()
         thumbprint = hashlib.sha256(mtls_cert).hexdigest() if mtls_cert else None
 

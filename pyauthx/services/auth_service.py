@@ -1,7 +1,7 @@
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import NoReturn, overload
+from typing import NoReturn, final, overload
 from uuid import UUID
 
 import jwt
@@ -12,15 +12,18 @@ from pydantic import ValidationError
 from pyauthx.core.key_management import KeyManager
 from pyauthx.exceptions import (
     InvalidTokenError,
+    MTLSValidationError,
     SecurityError,
     TokenExpiredError,
     TokenReuseError,
-    mTLSValidationError,
 )
 from pyauthx.models.tokens import ClientId, RefreshTokenRecord, TokenPayload, UserId
 
 
+@final
 class AuthService:
+    """Core authentication service handling token lifecycle and validation."""
+
     __slots__ = (
         "_access_token_ttl",
         "_algorithm",
@@ -29,8 +32,8 @@ class AuthService:
         "_refresh_token_ttl",
     )
 
-    DEFAULT_ACCESS_TOKEN_TTL: int = 900  # 15m
-    DEFAULT_REFRESH_TOKEN_TTL: int = 2592000  # 30d
+    DEFAULT_ACCESS_TOKEN_TTL: int = 900  # 15 minutes
+    DEFAULT_REFRESH_TOKEN_TTL: int = 2_592_000  # 30 days
 
     def __init__(
         self,
@@ -46,11 +49,12 @@ class AuthService:
 
     def _handle_error(
         self,
-        msg: str,
+        message: str,
         exception_type: type[Exception] = SecurityError,
         original_exception: Exception | None = None,
     ) -> NoReturn:
-        raise exception_type(msg) from original_exception
+        """Centralized error handling with consistent exception raising."""
+        raise exception_type(message) from original_exception
 
     @overload
     def create_token(self, subject: UserId) -> str: ...
@@ -66,7 +70,8 @@ class AuthService:
         subject: UserId,
         audience: ClientId | None = None,
         issuer: str | None = None,
-    ) -> str | None:
+    ) -> str:
+        """Create a signed JWT access token."""
         try:
             payload = TokenPayload(
                 sub=subject,
@@ -84,14 +89,15 @@ class AuthService:
                 headers={"kid": self._key_manager.current_key},
             )
         except (PyJWTError, ValidationError, ValueError, TypeError) as e:
-            self._handle_error("Error al crear el token", SecurityError, e)
+            self._handle_error("Failed to create token", SecurityError, e)
 
     def create_refresh_token(
         self,
         user_id: UserId,
         client_id: ClientId | None = None,
         mtls_thumbprint: str | None = None,
-    ) -> tuple[str, datetime] | None:
+    ) -> tuple[str, datetime]:
+        """Generate a secure refresh token with optional client binding."""
         try:
             raw_token = secrets.token_urlsafe(64)
             token_hash = hashlib.sha256(raw_token.encode()).digest()
@@ -107,7 +113,7 @@ class AuthService:
 
             self._refresh_store[record.token_family.hex] = record
         except (InvalidToken, ValueError, TypeError, ValidationError) as e:
-            self._handle_error("Error al crear el refresh token", SecurityError, e)
+            self._handle_error("Failed to create refresh token", SecurityError, e)
         else:
             return raw_token, expires_at
 
@@ -117,13 +123,14 @@ class AuthService:
         audience: ClientId | None = None,
         require_issuer: str | None = None,
     ) -> TokenPayload:
+        """Validate and decode a JWT token with full signature verification."""
         try:
             header = jwt.get_unverified_header(token)
             kid = header.get("kid")
             key = self._key_manager.get_verification_key(kid) if kid else None
 
             if not key:
-                self._handle_error("Key ID invalido", InvalidTokenError)
+                self._handle_error("Invalid key ID", InvalidTokenError)
 
             payload = jwt.decode(
                 token,
@@ -140,17 +147,18 @@ class AuthService:
             )
             return TokenPayload(**payload)
         except jwt.ExpiredSignatureError as e:
-            self._handle_error("Token expirado", TokenExpiredError, e)
+            self._handle_error("Token expired", TokenExpiredError, e)
         except jwt.InvalidTokenError as e:
-            self._handle_error("Token invalido", InvalidTokenError, e)
+            self._handle_error("Invalid token", InvalidTokenError, e)
         except (PyJWTError, ValidationError, ValueError, TypeError) as e:
-            self._handle_error("Token verificacion fallida", SecurityError, e)
+            self._handle_error("Token verification failed", SecurityError, e)
 
     def refresh_tokens(
         self,
         refresh_token: str,
         mtls_thumbprint: str | None = None,
-    ) -> tuple[str, str] | None:
+    ) -> tuple[str, str]:
+        """Exchange a valid refresh token for new access and refresh tokens."""
         try:
             token_hash = hashlib.sha256(refresh_token.encode()).digest()
             record = next(
@@ -159,30 +167,22 @@ class AuthService:
             )
 
             if not record:
-                self._handle_error("Refresh token invalido", InvalidTokenError)
+                self._handle_error("Invalid refresh token", InvalidTokenError)
 
             if record.used:
                 self._revoke_token_family(record.token_family)
-                self._handle_error(
-                    "Refresh token re-usado detectado",
-                    TokenReuseError,
-                )
+                self._handle_error("Refresh token reuse detected", TokenReuseError)
 
             self._validate_mtls(record, mtls_thumbprint)
             self._validate_token_expiry(record)
 
             record.used = True
             new_access_token = self.create_token(record.user_id)
-            refresh_result = self.create_refresh_token(
+            new_refresh_token, _ = self.create_refresh_token(
                 record.user_id,
                 record.client_id,
                 record.mtls_cert_thumbprint,
             )
-
-            if refresh_result is None:
-                self._handle_error("No se pudo crear el refresh token", SecurityError)
-
-            new_refresh_token, _ = refresh_result
         except SecurityError:
             raise
         except (ValueError, TypeError, PyJWTError, ValidationError) as e:
@@ -191,16 +191,19 @@ class AuthService:
             return new_access_token, new_refresh_token
 
     def revoke_token(self, token_hash: str) -> None:
+        """Revoke a specific refresh token by its hash."""
         if token_hash in self._refresh_store:
             del self._refresh_store[token_hash]
 
     def cleanup_expired_tokens(self) -> None:
+        """Remove all expired tokens from the refresh token store."""
         now = datetime.now(UTC)
         self._refresh_store = {
             k: v for k, v in self._refresh_store.items() if v.expires_at > now
         }
 
     def is_token_active(self, token_hash: str) -> bool:
+        """Check if a refresh token is still valid and usable."""
         record = self._refresh_store.get(token_hash)
         return (
             record is not None
@@ -213,17 +216,20 @@ class AuthService:
         record: RefreshTokenRecord,
         mtls_thumbprint: str | None,
     ) -> None:
+        """Validate mTLS certificate requirements for token refresh."""
         if record.mtls_cert_thumbprint:
             if not mtls_thumbprint:
-                self._handle_error("Client certificado necesario", mTLSValidationError)
+                self._handle_error("Client certificado necesario", MTLSValidationError)
             if record.mtls_cert_thumbprint != mtls_thumbprint:
-                self._handle_error("El certificado no coincide", mTLSValidationError)
+                self._handle_error("El certificado no coincide", MTLSValidationError)
 
     def _validate_token_expiry(self, record: RefreshTokenRecord) -> None:
+        """Verify the token hasn't exceeded its validity period."""
         if datetime.now(UTC) > record.expires_at:
             self._handle_error("Refresh token expirado", TokenExpiredError)
 
     def _revoke_token_family(self, family_id: UUID) -> None:
+        """Revoke all tokens belonging to the same token family."""
         family_key = family_id.hex
         if family_key in self._refresh_store:
             del self._refresh_store[family_key]
