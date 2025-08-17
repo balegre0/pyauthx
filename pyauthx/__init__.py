@@ -4,6 +4,7 @@ __license__ = "MIT"
 __copyright__ = "Copyright 2025-present balegre0"
 
 import contextlib
+import logging
 from importlib.metadata import PackageNotFoundError
 
 from .exceptions import (
@@ -19,6 +20,7 @@ from .facade import PyAuthX
 
 contextlib.suppress(PackageNotFoundError)
 
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
     "CryptographicError",

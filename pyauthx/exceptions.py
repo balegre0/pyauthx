@@ -24,3 +24,19 @@ class MTLSValidationError(SecurityError):
 
 class CryptographicError(SecurityError):
     """Cryptographic operation error"""
+
+
+class ChainValidationError(Exception):
+    """Base exception for chain validation failures."""
+
+
+class CertificateExtensionError(ChainValidationError):
+    """Raised when certificate extensions are invalid."""
+
+
+class SignatureValidationError(ChainValidationError):
+    """Raised when certificate signatures are invalid."""
+
+
+class TrustAnchorError(ChainValidationError):
+    """Raised when trust anchor verification fails."""

@@ -14,6 +14,10 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_public_key,
 )
 
+__all__ = [
+    "KeyWrapper",
+]
+
 
 class KeyWrapper:
     """Provides secure key wrapping using RSA-OAEP and ECIES encryption schemes.

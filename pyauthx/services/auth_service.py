@@ -25,6 +25,11 @@ if TYPE_CHECKING:
     from pyauthx.core.key_management import KeyManager
 
 
+__all__ = [
+    "AuthService",
+]
+
+
 @final
 class AuthService:
     """Core authentication service handling token lifecycle and validation."""
@@ -229,14 +234,14 @@ class AuthService:
         """Validate mTLS certificate requirements for token refresh."""
         if record.mtls_cert_thumbprint:
             if not mtls_thumbprint:
-                self._handle_error("Client certificado necesario", MTLSValidationError)
+                self._handle_error("Client certificate required", MTLSValidationError)
             if record.mtls_cert_thumbprint != mtls_thumbprint:
-                self._handle_error("El certificado no coincide", MTLSValidationError)
+                self._handle_error("Certificate does not match", MTLSValidationError)
 
     def _validate_token_expiry(self, record: RefreshTokenRecord) -> None:
         """Verify the token hasn't exceeded its validity period."""
         if datetime.now(UTC) > record.expires_at:
-            self._handle_error("Refresh token expirado", TokenExpiredError)
+            self._handle_error("Expired refresh token", TokenExpiredError)
 
     def _revoke_token_family(self, family_id: UUID) -> None:
         """Revoke all tokens belonging to the same token family."""

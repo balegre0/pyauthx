@@ -15,8 +15,19 @@ from pydantic import (
     field_validator,
 )
 
+__all__ = [
+    "MAX_FUTURE_TIMESTAMP_OFFSET",
+    "SHA256_HASH_LENGTH",
+    "ClientId",
+    "RefreshTokenRecord",
+    "SHA256Hash",
+    "Thumbprint",
+    "TokenPayload",
+    "UserId",
+]
+
 SHA256_HASH_LENGTH: Final[int] = 32  # SHA-256 produces 32-byte hashes
-MAX_FUTURE_TIMESTAMP_OFFSET: Final[int] = 31536000  # 1 year in seconds
+MAX_FUTURE_TIMESTAMP_OFFSET: Final[int] = 3_153_600_0  # 1 year in seconds
 
 SHA256Hash = Annotated[bytes, conbytes(min_length=32, max_length=32)]
 UserId = Annotated[
