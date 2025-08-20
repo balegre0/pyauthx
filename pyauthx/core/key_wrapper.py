@@ -14,25 +14,23 @@ from cryptography.hazmat.primitives.serialization import (
     load_pem_public_key,
 )
 
+from pyauthx.core.protocols import KeyWrapperProtocol
+from pyauthx.exceptions import CryptographicError, UnsupportedAlgorithmError
+
 __all__ = [
     "KeyWrapper",
 ]
 
 
 class KeyWrapper:
-    """Provides secure key wrapping using RSA-OAEP and ECIES encryption schemes.
+    """Provides secure key wrapping using RSA-OAEP and ECIES encryption schemes."""
 
-    Supports two cryptographic protocols:
-    1. RSA-OAEP: Optimal Asymmetric Encryption Padding for RSA
-    2. ECIES: Elliptic Curve Integrated Encryption Scheme
-    """
-
-    _MIN_WRAPPED_KEY_LEN: Final[int] = 2  # Minimum valid wrapped key length
-    RSA_WRAPPED_KEY_PREFIX: Final[int] = 0x01  # RSA key identifier
-    ECIES_WRAPPED_KEY_PREFIX: Final[int] = 0x02  # ECIES key identifier
-    _HKDF_INFO: Final[bytes] = b"ECIES Key Derivation"  # KDF context
-    _HKDF_LENGTH: Final[int] = 32  # Derived key length (AES-256)
-    VALID_KEY_SIZES: Final[tuple[int, ...]] = (16, 24, 32)  # AES key sizes
+    _MIN_WRAPPED_KEY_LEN: Final[int] = 2
+    RSA_WRAPPED_KEY_PREFIX: Final[bytes] = b"\x01"
+    ECIES_WRAPPED_KEY_PREFIX: Final[bytes] = b"\x02"
+    _HKDF_INFO: Final[bytes] = b"ECIES Key Derivation"
+    _HKDF_LENGTH: Final[int] = 32
+    VALID_KEY_SIZES: Final[tuple[int, ...]] = (16, 24, 32)
 
     @staticmethod
     @overload
@@ -59,26 +57,28 @@ class KeyWrapper:
         *,
         algorithm: Literal["RSA", "EC"] = "RSA",
     ) -> bytes:
-        """Securely wrap (encrypt) a symmetric key using public key cryptography."""
+        """Securely wrap a symmetric key using public key cryptography."""
         if len(plain_key) not in KeyWrapper.VALID_KEY_SIZES:
-            KeyWrapper._fail("Key must be 16, 24 or 32 bytes for AES")
+            KeyWrapper._fail(
+                f"Key must be {KeyWrapper.VALID_KEY_SIZES} bytes for AES",
+                CryptographicError,
+            )
 
         try:
             if algorithm == "RSA":
-                return KeyWrapper._rsa_oaep_wrap(public_key, plain_key)
+                return KeyWrapper.rsa_oaep_wrap(public_key, plain_key)
             if algorithm == "EC":
-                return KeyWrapper._ecies_wrap(public_key, plain_key)
-            KeyWrapper._fail(f"Unsupported algorithm: '{algorithm}'")
+                return KeyWrapper.ecies_wrap(public_key, plain_key)
+            KeyWrapper._fail(
+                f"Unsupported algorithm: '{algorithm}'",
+                UnsupportedAlgorithmError,
+            )
         except (ValueError, TypeError, InvalidKey) as e:
-            KeyWrapper._fail("Key wrapping failed", cause=e)
+            KeyWrapper._fail("Key wrapping failed", CryptographicError, e)
 
     @staticmethod
-    def _rsa_oaep_wrap(public_key_pem: bytes, plain_key: bytes) -> bytes:
-        """Wrap a key using RSA-OAEP encryption.
-
-        Package format:
-        [1 byte prefix][1 byte key size][N bytes ciphertext]
-        """
+    def rsa_oaep_wrap(public_key_pem: bytes, plain_key: bytes) -> bytes:
+        """Wrap a key using RSA-OAEP encryption."""
         public_key = load_pem_public_key(public_key_pem, backend=default_backend())
         if not isinstance(public_key, rsa.RSAPublicKey):
             msg = "RSA public key required"
@@ -92,16 +92,11 @@ class KeyWrapper:
                 label=None,
             ),
         )
-        return bytes([KeyWrapper.RSA_WRAPPED_KEY_PREFIX, len(plain_key)]) + ciphertext
+        return KeyWrapper.RSA_WRAPPED_KEY_PREFIX + bytes([len(plain_key)]) + ciphertext
 
     @staticmethod
-    def _ecies_wrap(public_key_pem: bytes, plain_key: bytes) -> bytes:
-        """Wrap a key using ECIES encryption.
-
-        Package format:
-        [1 byte prefix][2 byte point size][N bytes ephemeral point]
-        [12 bytes nonce][M bytes ciphertext]
-        """
+    def ecies_wrap(public_key_pem: bytes, plain_key: bytes) -> bytes:
+        """Wrap a key using ECIES encryption."""
         public_key = load_pem_public_key(public_key_pem, backend=default_backend())
         if not isinstance(public_key, ec.EllipticCurvePublicKey):
             msg = "EC public key required"
@@ -126,11 +121,7 @@ class KeyWrapper:
 
         # AES-GCM encryption
         nonce = os.urandom(12)
-        ciphertext = AESGCM(derived_key).encrypt(
-            nonce,
-            plain_key,
-            associated_data=None,
-        )
+        ciphertext = AESGCM(derived_key).encrypt(nonce, plain_key, None)
 
         # Serialize components
         ephemeral_point = ephemeral_pub.public_bytes(
@@ -139,7 +130,7 @@ class KeyWrapper:
         )
 
         return (
-            bytes([KeyWrapper.ECIES_WRAPPED_KEY_PREFIX])
+            KeyWrapper.ECIES_WRAPPED_KEY_PREFIX
             + len(ephemeral_point).to_bytes(2, "big")
             + ephemeral_point
             + nonce
@@ -171,23 +162,26 @@ class KeyWrapper:
         *,
         algorithm: Literal["RSA", "EC"] = "RSA",
     ) -> bytes:
-        """Unwrap (decrypt) a previously wrapped symmetric key."""
+        """Unwrap a previously wrapped symmetric key."""
         if not wrapped_key or len(wrapped_key) < KeyWrapper._MIN_WRAPPED_KEY_LEN:
-            KeyWrapper._fail("Invalid wrapped key data")
+            KeyWrapper._fail("Invalid wrapped key data", CryptographicError)
 
         try:
             if algorithm == "RSA":
-                return KeyWrapper._rsa_oaep_unwrap(private_key, wrapped_key)
+                return KeyWrapper.rsa_oaep_unwrap(private_key, wrapped_key)
             if algorithm == "EC":
-                return KeyWrapper._ecies_unwrap(private_key, wrapped_key)
-            KeyWrapper._fail(f"Unsupported algorithm: '{algorithm}'")
+                return KeyWrapper.ecies_unwrap(private_key, wrapped_key)
+            KeyWrapper._fail(
+                f"Unsupported algorithm: '{algorithm}'",
+                UnsupportedAlgorithmError,
+            )
         except (ValueError, TypeError, InvalidKey, InvalidTag) as e:
-            KeyWrapper._fail("Key unwrapping failed", cause=e)
+            KeyWrapper._fail("Key unwrapping failed", CryptographicError, e)
 
     @staticmethod
-    def _rsa_oaep_unwrap(private_key_pem: bytes, wrapped_key: bytes) -> bytes:
+    def rsa_oaep_unwrap(private_key_pem: bytes, wrapped_key: bytes) -> bytes:
         """Unwrap an RSA-OAEP encrypted key package."""
-        if wrapped_key[0] != KeyWrapper.RSA_WRAPPED_KEY_PREFIX:
+        if not wrapped_key.startswith(KeyWrapper.RSA_WRAPPED_KEY_PREFIX):
             msg = "Invalid RSA wrapped key format"
             raise ValueError(msg)
 
@@ -219,9 +213,9 @@ class KeyWrapper:
         return plain_key
 
     @staticmethod
-    def _ecies_unwrap(private_key_pem: bytes, wrapped_key: bytes) -> bytes:
+    def ecies_unwrap(private_key_pem: bytes, wrapped_key: bytes) -> bytes:
         """Unwrap an ECIES encrypted key package."""
-        if wrapped_key[0] != KeyWrapper.ECIES_WRAPPED_KEY_PREFIX:
+        if not wrapped_key.startswith(KeyWrapper.ECIES_WRAPPED_KEY_PREFIX):
             msg = "Invalid ECIES wrapped key format"
             raise ValueError(msg)
 
@@ -261,7 +255,6 @@ class KeyWrapper:
             backend=default_backend(),
         ).derive(shared_key)
 
-        # AES-GCM decryption
         try:
             return AESGCM(derived_key).decrypt(nonce, ciphertext, None)
         except InvalidTag as e:
@@ -269,8 +262,32 @@ class KeyWrapper:
             raise ValueError(msg) from e
 
     @staticmethod
-    def _fail(message: str, *, cause: Exception | None = None) -> NoReturn:
+    def _fail(
+        message: str,
+        exception_type: type[Exception] = CryptographicError,
+        cause: Exception | None = None,
+    ) -> NoReturn:
         """Uniform error handling for cryptographic operations."""
         if cause:
-            raise ValueError(message) from cause
-        raise ValueError(message)
+            raise exception_type(message) from cause
+        raise exception_type(message)
+
+
+class RSAKeyWrapper(KeyWrapperProtocol):
+    """RSA-OAEP key wrapper implementation."""
+
+    def wrap_key(self, public_key: bytes, plain_key: bytes) -> bytes:
+        return KeyWrapper.rsa_oaep_wrap(public_key, plain_key)
+
+    def unwrap_key(self, private_key: bytes, wrapped_key: bytes) -> bytes:
+        return KeyWrapper.rsa_oaep_unwrap(private_key, wrapped_key)
+
+
+class ECIESKeyWrapper(KeyWrapperProtocol):
+    """ECIES key wrapper implementation."""
+
+    def wrap_key(self, public_key: bytes, plain_key: bytes) -> bytes:
+        return KeyWrapper.ecies_wrap(public_key, plain_key)
+
+    def unwrap_key(self, private_key: bytes, wrapped_key: bytes) -> bytes:
+        return KeyWrapper.ecies_unwrap(private_key, wrapped_key)

@@ -61,7 +61,7 @@ class MTLSValidator:
     __slots__ = ("_ca_bundle", "_ca_certificates", "_ocsp_enabled")
 
     _CA_CACHE: ClassVar[dict[bytes, list[Certificate]]] = {}
-    DEFAULT_HASH_ALGORITHM: Final = hashes.SHA256()
+    DEFAULT_HASH_ALGORITHM: Final[hashes.HashAlgorithm] = hashes.SHA256()
 
     def __init__(
         self,

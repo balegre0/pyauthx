@@ -26,6 +26,14 @@ class CryptographicError(SecurityError):
     """Cryptographic operation error"""
 
 
+class UnsupportedAlgorithmError(CryptographicError):
+    """Unsupported algorithm requested"""
+
+
+class KeySizeError(CryptographicError):
+    """Invalid key size"""
+
+
 class ChainValidationError(Exception):
     """Base exception for chain validation failures."""
 
